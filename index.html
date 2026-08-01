@@ -726,6 +726,7 @@ function Tracker({ onLogout }) {
   const [sortDir, setSortDir] = useState("desc");
   const [editingCategoryId, setEditingCategoryId] = useState(null);
   const [editingCategoryValue, setEditingCategoryValue] = useState("");
+  const [amountError, setAmountError] = useState("");
 
   if (loadError) {
     return (
