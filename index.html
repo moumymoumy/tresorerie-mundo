@@ -460,7 +460,72 @@ function MiniChart({ points, threshold }) {
 // ============================================
 // IMPORT PDF — tableau de vérification
 // ============================================
-function ImportPdf({ categories, existingTransactions, onClose, onImported }) {
+// ============================================
+// CHAMP CATÉGORIE AVEC AUTOCOMPLÉTION
+// Propose les catégories déjà encodées dès la première lettre.
+// Entrée = valide la suggestion surlignée (et déclenche onSubmit si fourni).
+// Clic sur une suggestion = même résultat, sans clavier.
+// ============================================
+function CategoryInput({ value, onChange, suggestions, placeholder, style, inputStyle, onSubmit, disabled, autoFocus }) {
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+
+  const typed = (value || "").trim().toLowerCase();
+  const filtered = typed
+    ? (suggestions || []).filter((s) => s.toLowerCase().startsWith(typed) && s.toLowerCase() !== typed)
+    : [];
+
+  useEffect(() => { setHighlight(0); }, [value]);
+
+  const selectSuggestion = (s) => {
+    onChange(s);
+    setOpen(false);
+    if (onSubmit) onSubmit(s);
+  };
+
+  const handleKeyDown = (e) => {
+    if (open && filtered.length > 0) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => Math.min(h + 1, filtered.length - 1)); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => Math.max(h - 1, 0)); return; }
+      if (e.key === "Enter") { e.preventDefault(); selectSuggestion(filtered[highlight]); return; }
+      if (e.key === "Escape") { setOpen(false); return; }
+    } else if (e.key === "Enter" && onSubmit) {
+      e.preventDefault();
+      onSubmit(value);
+    }
+  };
+
+  return (
+    <div style={{ position: "relative", ...style }}>
+      <input
+        style={{ width: "100%", ...inputStyle }}
+        value={value || ""}
+        placeholder={placeholder}
+        disabled={disabled}
+        autoFocus={autoFocus}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={handleKeyDown}
+      />
+      {open && filtered.length > 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: "#fff", border: "1px solid var(--border)", borderRadius: 8, marginTop: 2, maxHeight: 160, overflowY: "auto", boxShadow: "0 4px 10px rgba(0,0,0,.08)" }}>
+          {filtered.map((s, i) => (
+            <div
+              key={s}
+              onMouseDown={(e) => { e.preventDefault(); selectSuggestion(s); }}
+              style={{ padding: "6px 10px", fontSize: 13, cursor: "pointer", background: i === highlight ? "#f1f5f9" : "#fff" }}
+            >
+              {s}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ImportPdf({ categories, existingCategories, existingTransactions, onClose, onImported }) {
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState({}); // tempId -> "pending" | "validated" | "skipped"
   const [parsing, setParsing] = useState(false);
@@ -594,12 +659,14 @@ function ImportPdf({ categories, existingTransactions, onClose, onImported }) {
                       <td>{r.dateValeur || "—"}</td>
                       <td className="right" style={{color: r.type==="expense"?"var(--red)":"var(--green)"}}>{r.type==="expense"?"-":"+"}{fmt(Math.abs(r.montant))}</td>
                       <td>
-                        <input
-                          style={{width:120,fontSize:12,display:"block",marginBottom:4}}
+                        <CategoryInput
+                          style={{width:120,marginBottom:4}}
+                          inputStyle={{fontSize:12}}
                           value={r.category}
                           placeholder="Catégorie"
+                          suggestions={existingCategories}
                           disabled={status[r.tempId] === "imported"}
-                          onChange={(e) => updateRow(r.tempId, { category: e.target.value })}
+                          onChange={(val) => updateRow(r.tempId, { category: val })}
                         />
                         <input
                           style={{width:120,fontSize:12}}
@@ -671,6 +738,12 @@ function Tracker({ onLogout }) {
   if (!data) return <div className="wrap"><p className="muted">Chargement…</p></div>;
 
   const { settings, recurring, transactions } = data;
+  const allCategories = useMemo(() => {
+    const set = new Set();
+    (data.categories || []).forEach((c) => c.categorie && set.add(c.categorie));
+    transactions.forEach((t) => t.category && set.add(t.category));
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "fr"));
+  }, [data.categories, transactions]);
   const events = buildEvents(recurring, transactions);
   const weeks = buildWeeks(settings.openingDate);
 
@@ -806,6 +879,7 @@ function Tracker({ onLogout }) {
       {showImportPdf && (
         <ImportPdf
           categories={data.categories || []}
+          existingCategories={allCategories}
           existingTransactions={transactions}
           onClose={() => setShowImportPdf(false)}
           onImported={reload}
@@ -911,11 +985,13 @@ function Tracker({ onLogout }) {
                   <td className="muted">
                     {editingCategoryId === t.id ? (
                       <div className="row" style={{gap:4}}>
-                        <input
-                          style={{width:110,fontSize:12}}
+                        <CategoryInput
+                          style={{width:110}}
+                          inputStyle={{fontSize:12}}
                           value={editingCategoryValue}
-                          onChange={(e) => setEditingCategoryValue(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") saveCategoryEdit(t.id); }}
+                          onChange={setEditingCategoryValue}
+                          suggestions={allCategories}
+                          onSubmit={() => saveCategoryEdit(t.id)}
                           autoFocus
                         />
                         <button className="btn-ghost" style={{padding:"2px 4px"}} onClick={() => saveCategoryEdit(t.id)}>✓</button>
@@ -956,7 +1032,7 @@ function Tracker({ onLogout }) {
             </div>
             <input style={{width:"100%",marginBottom:8}} type="text" placeholder="Description (ex: Réparation matériel)" value={newTx.label} onChange={e=>setNewTx({...newTx,label:e.target.value})} />
             <div className="row" style={{marginBottom:8}}>
-              <input style={{flex:1}} type="text" placeholder="Catégorie (optionnel)" value={newTx.category} onChange={e=>setNewTx({...newTx,category:e.target.value})} />
+              <CategoryInput style={{flex:1}} placeholder="Catégorie (optionnel)" value={newTx.category} onChange={(val)=>setNewTx({...newTx,category:val})} suggestions={allCategories} />
               <input style={{flex:1}} type="number" step="0.01" placeholder="Montant €" value={newTx.amount} onChange={e=>setNewTx({...newTx,amount:e.target.value})} />
             </div>
             <div className="row" style={{justifyContent:"flex-end"}}>
