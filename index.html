@@ -797,9 +797,15 @@ function Tracker({ onLogout }) {
 
   const addRecurring = async () => {
     if (!newRecurring.label || !newRecurring.amount) return;
+    const amountValue = parseFloat(newRecurring.amount);
+    if (isNaN(amountValue) || amountValue <= 0) {
+      setAmountError("Montant invalide : entre un nombre supérieur à 0.");
+      return;
+    }
+    setAmountError("");
     const row = {
       label: newRecurring.label,
-      amount: parseFloat(newRecurring.amount),
+      amount: amountValue,
       type: newRecurring.type,
       day: Math.min(31, Math.max(1, parseInt(newRecurring.day) || 1)),
     };
