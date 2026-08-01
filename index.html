@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MUNDO ASBL — Suivi de trésorerie 2026</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#f8fafc; --card:#ffffff; --border:#e2e8f0; --text:#1e293b; --muted:#64748b;
+    --dark:#0f172a; --red:#dc2626; --red-bg:#fef2f2; --red-border:#fecaca;
+    --amber:#d97706; --amber-bg:#fffbeb; --amber-border:#fde68a;
+    --green:#047857;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Arial,sans-serif;}
+  .wrap{max-width:960px;margin:0 auto;padding:20px;}
+  .row{display:flex;align-items:center;gap:12px;}
+  .between{justify-content:space-between;flex-wrap:wrap;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;}
+  .btn{display:inline-flex;align-items:center;gap:6px;font-size:14px;padding:8px 12px;border-radius:10px;border:1px solid var(--border);background:#fff;color:var(--text);cursor:pointer;}
+  .btn:hover{background:#f1f5f9;}
+  .btn-dark{background:var(--dark);color:#fff;border-color:var(--dark);}
+  .btn-dark:hover{background:#1e293b;}
+  .btn-ghost{border:none;background:transparent;color:var(--muted);cursor:pointer;}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+  @media (max-width:640px){.grid3{grid-template-columns:1fr;}}
+  .stat-label{font-size:12px;color:var(--muted);margin:0 0 4px 0;}
+  .stat-value{font-size:24px;font-weight:700;margin:0;}
+  .tabs{display:flex;gap:8px;margin:16px 0;}
+  .tab{font-size:14px;padding:7px 14px;border-radius:10px;border:1px solid var(--border);background:#fff;color:var(--muted);cursor:pointer;}
+  .tab.active{background:var(--dark);color:#fff;border-color:var(--dark);}
+  table{width:100%;border-collapse:collapse;font-size:14px;}
+  th{text-align:left;font-weight:500;color:var(--muted);padding:10px;background:#f8fafc;position:sticky;top:0;}
+  td{padding:10px;border-top:1px solid #f1f5f9;}
+  .right{text-align:right;}
+  .tbl-scroll{max-height:380px;overflow-y:auto;}
+  .banner{display:flex;gap:8px;align-items:flex-start;border-radius:12px;padding:12px;font-size:14px;}
+  .banner.red{background:var(--red-bg);border:1px solid var(--red-border);color:#991b1b;}
+  .banner.amber{background:var(--amber-bg);border:1px solid var(--amber-border);color:#92400e;}
+  input,select{font-size:14px;padding:7px 9px;border-radius:8px;border:1px solid #cbd5e1;font-family:inherit;}
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50;}
+  .modal{background:#fff;border-radius:14px;max-width:520px;width:100%;max-height:85vh;overflow-y:auto;padding:20px;}
+  .item-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid #f1f5f9;font-size:14px;}
+  .small{font-size:12px;}
+  .muted{color:var(--muted);}
+  .footer-note{font-size:12px;color:var(--muted);margin-top:16px;text-align:center;}
+  .save-error{background:var(--red-bg);border:1px solid var(--red-border);color:#991b1b;border-radius:10px;padding:10px 14px;font-size:13px;}
+  .login-wrap{max-width:360px;margin:80px auto;padding:24px;}
+  .login-title{font-weight:700;font-size:18px;margin-bottom:16px;text-align:center;}
+  .login-error{background:var(--red-bg);border:1px solid var(--red-border);color:#991b1b;border-radius:10px;padding:8px 12px;font-size:13px;margin-bottom:12px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useMemo, useCallback } = React;
+
+// ============================================
+// CONNEXION SUPABASE
+// Remplace les deux valeurs ci-dessous avant de déployer.
+// ============================================
+const SUPABASE_URL = "https://gfpqwigfhbnvlhctnmxr.supabase.co";
+const SUPABASE_KEY = "sb_publishable_x329McO5udm-w_04xqQmFg_ZFijAfrD";
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const MONTHS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+
+const fmt = (n) => new Intl.NumberFormat("fr-BE", { style: "currency", currency: "EUR" }).format(n || 0);
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const shortDate = (d) => d.toLocaleDateString("fr-BE", { day: "2-digit", month: "2-digit" });
+
+// ============================================
+// ÉCRAN DE CONNEXION
+// ============================================
+function Login({ onLoggedIn }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async () => {
+    setError("");
+    setLoading(true);
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    setLoading(false);
+    if (error) {
+      setError("Email ou mot de passe incorrect.");
+      return;
+    }
+    onLoggedIn(data.session);
+  };
+
+  return (
+    <div className="login-wrap card">
+      <p className="login-title">MUNDO ASBL — Suivi de trésorerie</p>
+      {error && <div className="login-error">{error}</div>}
+      <input style={{width:"100%",marginBottom:8}} type="email" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} />
+      <input style={{width:"100%",marginBottom:12}} type="password" placeholder="Mot de passe" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} />
+      <button className="btn btn-dark" style={{width:"100%",justifyContent:"center"}} onClick={handleLogin} disabled={loading}>
+        {loading ? "Connexion..." : "Se connecter"}
+      </button>
+    </div>
+  );
+}
+
+// ============================================
+// CHARGEMENT / SAUVEGARDE DES DONNÉES (Supabase)
+// ============================================
+function useTrackerData() {
+  const [data, setDataState] = useState(null);
+  const [saveError, setSaveError] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+
+  const loadAll = useCallback(async () => {
+    setLoadError(false);
+    try {
+      const [settingsRes, recurringRes, txRes] = await Promise.all([
+        supabase.from("Suivi_Tresorerie_settings").select("*").eq("id", 1).single(),
+        supabase.from("Suivi_Tresorerie_recurring").select("*").order("created_at"),
+        supabase.from("Suivi_Tresorerie_transactions").select("*").order("date"),
+      ]);
+      if (settingsRes.error) throw settingsRes.error;
+      if (recurringRes.error) throw recurringRes.error;
+      if (txRes.error) throw txRes.error;
+
+      setDataState({
+        settings: {
+          openingBalance: settingsRes.data.opening_balance,
+          openingDate: settingsRes.data.opening_date,
+          alertThreshold: settingsRes.data.alert_threshold,
+        },
+        recurring: recurringRes.data.map(r => ({
+          id: r.id, label: r.label, amount: r.amount, type: r.type, day: r.day,
+        })),
+        transactions: txRes.data.map(t => ({
+          id: t.id, date: t.date, label: t.label, amount: t.amount, type: t.type, category: t.category,
+        })),
+      });
+    } catch (e) {
+      console.error(e);
+      setLoadError(true);
+    }
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  return { data, setDataState, saveError, setSaveError, loadError, reload: loadAll };
+}
+
+function daysInMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0).getDate();
+}
+
+function buildEvents(recurring, transactions) {
+  const events = [];
+  recurring.forEach((r) => {
+    const signed = r.type === "expense" ? -Math.abs(r.amount) : Math.abs(r.amount);
+    for (let m = 0; m < 12; m++) {
+      const wantedDay = r.day || 1;
+      const day = Math.min(wantedDay, daysInMonth(2026, m));
+      const date = `2026-${String(m + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      events.push({ date, amount: signed, label: r.label, month: m });
+    }
+  });
+  transactions.forEach((t) => {
+    const signed = t.type === "expense" ? -Math.abs(t.amount) : Math.abs(t.amount);
+    const month = new Date(t.date + "T00:00:00").getMonth();
+    events.push({ date: t.date, amount: signed, label: t.label, month, category: t.category });
+  });
+  events.sort((a, b) => (a.date < b.date ? -1 : 1));
+  return events;
+}
+
+function buildWeeks(openingDate) {
+  const start = new Date(openingDate + "T00:00:00");
+  const weeks = [];
+  let cursor = new Date(start);
+  for (let i = 0; i < 53; i++) {
+    const wStart = new Date(cursor);
+    const wEnd = new Date(cursor);
+    wEnd.setDate(wEnd.getDate() + 6);
+    if (wStart.getFullYear() > 2026) break;
+    weeks.push({ index: i + 1, start: wStart, end: wEnd });
+    cursor.setDate(cursor.getDate() + 7);
+  }
+  return weeks;
+}
+
+function dateInRange(dateStr, start, end) {
+  const d = new Date(dateStr + "T00:00:00");
+  return d >= start && d <= end;
+}
+
+function MiniChart({ points, threshold }) {
+  const W = 880, H = 200, padL = 50, padR = 10, padT = 10, padB = 24;
+  if (!points.length) return null;
+  const values = points.map((p) => p.balance);
+  const max = Math.max(...values, threshold, 0);
+  const min = Math.min(...values, 0);
+  const range = max - min || 1;
+  const x = (i) => padL + (i / (points.length - 1 || 1)) * (W - padL - padR);
+  const y = (v) => padT + (1 - (v - min) / range) * (H - padT - padB);
+
+  const path = points.map((p, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(p.balance).toFixed(1)}`).join(" ");
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 220 }}>
+      <line x1={padL} x2={W - padR} y1={y(0)} y2={y(0)} stroke="#dc2626" strokeDasharray="4 4" />
+      <line x1={padL} x2={W - padR} y1={y(threshold)} y2={y(threshold)} stroke="#d97706" strokeDasharray="4 4" />
+      <text x={padL} y={y(0) - 4} fontSize="10" fill="#dc2626">0 €</text>
+      <text x={padL} y={y(threshold) - 4} fontSize="10" fill="#d97706">seuil</text>
+      <path d={path} fill="none" stroke="#0f172a" strokeWidth="2" />
+      {points.filter((_, i) => i % 4 === 0).map((p, idx) => {
+        const i = idx * 4;
+        return <text key={i} x={x(i)} y={H - 6} fontSize="9" fill="#94a3b8" textAnchor="middle">S{p.index}</text>;
+      })}
+    </svg>
+  );
+}
+
+function Tracker({ onLogout }) {
+  const { data, setDataState, saveError, setSaveError, loadError, reload } = useTrackerData();
+  const [tab, setTab] = useState("hebdo");
+  const [showRecurring, setShowRecurring] = useState(false);
+  const [showAddTx, setShowAddTx] = useState(false);
+  const [newRecurring, setNewRecurring] = useState({ label: "", amount: "", type: "expense", day: "1" });
+  const [newTx, setNewTx] = useState({ date: todayISO(), label: "", amount: "", type: "expense", category: "" });
+
+  if (loadError) {
+    return (
+      <div className="wrap">
+        <div className="save-error">Impossible de charger les données depuis Supabase. Vérifie ta connexion internet, puis réessaie.</div>
+        <button className="btn" style={{marginTop:12}} onClick={reload}>Réessayer</button>
+      </div>
+    );
+  }
+
+  if (!data) return <div className="wrap"><p className="muted">Chargement…</p></div>;
+
+  const { settings, recurring, transactions } = data;
+  const events = buildEvents(recurring, transactions);
+  const weeks = buildWeeks(settings.openingDate);
+
+  let running = settings.openingBalance;
+  const weekRows = weeks.map((w) => {
+    const weekEvents = events.filter((e) => dateInRange(e.date, w.start, w.end));
+    const net = weekEvents.reduce((s, e) => s + e.amount, 0);
+    running += net;
+    return { ...w, net, balance: running, events: weekEvents };
+  });
+
+  let runningM = settings.openingBalance;
+  const monthRows = MONTHS.map((name, m) => {
+    const monthEvents = events.filter((e) => e.month === m);
+    const recette = monthEvents.filter((e) => e.amount > 0).reduce((s, e) => s + e.amount, 0);
+    const depense = monthEvents.filter((e) => e.amount < 0).reduce((s, e) => s + e.amount, 0);
+    const net = recette + depense;
+    runningM += net;
+    return { name, recette, depense, net, balance: runningM };
+  });
+
+  const currentBalance = weekRows.length ? weekRows[weekRows.length - 1].balance : settings.openingBalance;
+  const firstDangerWeek = weekRows.find((w) => w.balance < settings.alertThreshold);
+  const firstNegativeWeek = weekRows.find((w) => w.balance < 0);
+  const balanceColor = currentBalance < 0 ? "var(--red)" : currentBalance < settings.alertThreshold ? "var(--amber)" : "var(--green)";
+
+  const addRecurring = async () => {
+    if (!newRecurring.label || !newRecurring.amount) return;
+    const row = {
+      label: newRecurring.label,
+      amount: parseFloat(newRecurring.amount),
+      type: newRecurring.type,
+      day: Math.min(31, Math.max(1, parseInt(newRecurring.day) || 1)),
+    };
+    const { data: inserted, error } = await supabase.from("Suivi_Tresorerie_recurring").insert(row).select().single();
+    if (error) { setSaveError(true); return; }
+    setSaveError(false);
+    setDataState({ ...data, recurring: [...recurring, { id: inserted.id, ...row }] });
+    setNewRecurring({ label: "", amount: "", type: "expense", day: "1" });
+  };
+
+  const removeRecurring = async (id) => {
+    const { error } = await supabase.from("Suivi_Tresorerie_recurring").delete().eq("id", id);
+    if (error) { setSaveError(true); return; }
+    setSaveError(false);
+    setDataState({ ...data, recurring: recurring.filter((r) => r.id !== id) });
+  };
+
+  const updateRecurringDay = async (id, day) => {
+    setDataState({ ...data, recurring: recurring.map((x) => x.id === id ? { ...x, day } : x) });
+    const { error } = await supabase.from("Suivi_Tresorerie_recurring").update({ day }).eq("id", id);
+    if (error) setSaveError(true); else setSaveError(false);
+  };
+
+  const addTx = async () => {
+    if (!newTx.label || !newTx.amount || !newTx.date) return;
+    const row = {
+      date: newTx.date, label: newTx.label,
+      amount: parseFloat(newTx.amount), type: newTx.type, category: newTx.category,
+      source: "manuel",
+    };
+    const { data: inserted, error } = await supabase.from("Suivi_Tresorerie_transactions").insert(row).select().single();
+    if (error) { setSaveError(true); return; }
+    setSaveError(false);
+    setDataState({ ...data, transactions: [...transactions, { id: inserted.id, date: row.date, label: row.label, amount: row.amount, type: row.type, category: row.category }] });
+    setNewTx({ date: todayISO(), label: "", amount: "", type: "expense", category: "" });
+    setShowAddTx(false);
+  };
+
+  const removeTx = async (id) => {
+    const { error } = await supabase.from("Suivi_Tresorerie_transactions").delete().eq("id", id);
+    if (error) { setSaveError(true); return; }
+    setSaveError(false);
+    setDataState({ ...data, transactions: transactions.filter((t) => t.id !== id) });
+  };
+
+  const updateSetting = async (key, value) => {
+    setDataState({ ...data, settings: { ...settings, [key]: value } });
+    const dbKey = key === "openingBalance" ? "opening_balance" : key === "openingDate" ? "opening_date" : "alert_threshold";
+    const { error } = await supabase.from("Suivi_Tresorerie_settings").update({ [dbKey]: value }).eq("id", 1);
+    if (error) setSaveError(true); else setSaveError(false);
+  };
+
+  return (
+    <div className="wrap">
+      <div className="row between">
+        <div className="row">
+          <div style={{width:40,height:40,borderRadius:10,background:"var(--dark)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:18}}>€</div>
+          <div>
+            <div style={{fontWeight:700,fontSize:17}}>MUNDO ASBL</div>
+            <div className="small muted">Suivi de trésorerie — 2026</div>
+          </div>
+        </div>
+        <div className="row">
+          <button className="btn" onClick={() => setShowRecurring(true)}>⚙ Dépenses fixes & paramètres</button>
+          <button className="btn" onClick={onLogout}>Déconnexion</button>
+        </div>
+      </div>
+
+      {saveError && <div className="save-error" style={{marginTop:12}}>La sauvegarde vers Supabase a échoué. Vérifie ta connexion, tes modifications récentes n'ont peut-être pas été enregistrées.</div>}
+
+      <div className="grid3" style={{marginTop:16}}>
+        <div className="card">
+          <p className="stat-label">Trésorerie actuelle (projetée)</p>
+          <p className="stat-value" style={{color:balanceColor}}>{fmt(currentBalance)}</p>
+        </div>
+        <div className="card">
+          <p className="stat-label">Solde de départ (01/01/2026)</p>
+          <p className="stat-value">{fmt(settings.openingBalance)}</p>
+        </div>
+        <div className="card">
+          <p className="stat-label">Seuil d'alerte</p>
+          <p className="stat-value">{fmt(settings.alertThreshold)}</p>
+        </div>
+      </div>
+
+      {(firstDangerWeek || firstNegativeWeek) && (
+        <div className={`banner ${firstNegativeWeek ? "red" : "amber"}`} style={{marginTop:16}}>
+          <span>⚠</span>
+          {firstNegativeWeek ? (
+            <span><b>Trésorerie négative projetée</b> à partir de la semaine du {shortDate(firstNegativeWeek.start)} au {shortDate(firstNegativeWeek.end)}.</span>
+          ) : (
+            <span><b>Sous le seuil d'alerte</b> à partir de la semaine du {shortDate(firstDangerWeek.start)} au {shortDate(firstDangerWeek.end)}.</span>
+          )}
+        </div>
+      )}
+
+      <div className="card" style={{marginTop:16}}>
+        <p style={{fontSize:14,fontWeight:600,marginTop:0}}>Évolution de la trésorerie (semaine par semaine)</p>
+        <MiniChart points={weekRows} threshold={settings.alertThreshold} />
+      </div>
+
+      <div className="tabs">
+        <button className={`tab ${tab==="hebdo"?"active":""}`} onClick={() => setTab("hebdo")}>Vue hebdomadaire</button>
+        <button className={`tab ${tab==="mensuel"?"active":""}`} onClick={() => setTab("mensuel")}>Vue mensuelle</button>
+      </div>
+
+      {tab === "hebdo" && (
+        <div className="card" style={{padding:0}}>
+          <div className="tbl-scroll">
+            <table>
+              <thead><tr><th>Semaine</th><th>Transactions</th><th className="right">Net</th><th className="right">Solde</th></tr></thead>
+              <tbody>
+                {weekRows.map((w) => (
+                  <tr key={w.index}>
+                    <td style={{whiteSpace:"nowrap"}} className="muted">S{w.index} · {shortDate(w.start)}–{shortDate(w.end)}</td>
+                    <td className="muted">{w.events.length===0 ? <span style={{color:"#cbd5e1"}}>—</span> : w.events.map(e=>e.label).join(", ")}</td>
+                    <td className="right" style={{color: w.net<0?"var(--red)":w.net>0?"var(--green)":"#94a3b8"}}>{w.net!==0?fmt(w.net):"—"}</td>
+                    <td className="right" style={{fontWeight:600,color: w.balance<0?"var(--red)":w.balance<settings.alertThreshold?"var(--amber)":"#1e293b"}}>{fmt(w.balance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "mensuel" && (
+        <div className="card" style={{padding:0}}>
+          <table>
+            <thead><tr><th>Mois</th><th className="right">Recettes</th><th className="right">Dépenses</th><th className="right">Net</th><th className="right">Solde fin de mois</th></tr></thead>
+            <tbody>
+              {monthRows.map((m) => (
+                <tr key={m.name}>
+                  <td>{m.name}</td>
+                  <td className="right" style={{color:"var(--green)"}}>{fmt(m.recette)}</td>
+                  <td className="right" style={{color:"var(--red)"}}>{fmt(m.depense)}</td>
+                  <td className="right" style={{color: m.net<0?"var(--red)":"var(--green)"}}>{fmt(m.net)}</td>
+                  <td className="right" style={{fontWeight:700,color: m.balance<0?"var(--red)":m.balance<settings.alertThreshold?"var(--amber)":"#1e293b"}}>{fmt(m.balance)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="card" style={{marginTop:16}}>
+        <div className="row between">
+          <p style={{fontSize:14,fontWeight:600,margin:0}}>📅 Dépenses & recettes ponctuelles</p>
+          <button className="btn btn-dark" onClick={() => setShowAddTx(true)}>+ Ajouter</button>
+        </div>
+
+        {showAddTx && (
+          <div className="card" style={{background:"#f8fafc",marginTop:12}}>
+            <div className="row" style={{marginBottom:8}}>
+              <input type="date" value={newTx.date} onChange={e=>setNewTx({...newTx,date:e.target.value})} />
+              <select value={newTx.type} onChange={e=>setNewTx({...newTx,type:e.target.value})}>
+                <option value="expense">Dépense</option>
+                <option value="income">Recette</option>
+              </select>
+            </div>
+            <input style={{width:"100%",marginBottom:8}} type="text" placeholder="Description (ex: Réparation matériel)" value={newTx.label} onChange={e=>setNewTx({...newTx,label:e.target.value})} />
+            <div className="row" style={{marginBottom:8}}>
+              <input style={{flex:1}} type="text" placeholder="Catégorie (optionnel)" value={newTx.category} onChange={e=>setNewTx({...newTx,category:e.target.value})} />
+              <input style={{flex:1}} type="number" step="0.01" placeholder="Montant €" value={newTx.amount} onChange={e=>setNewTx({...newTx,amount:e.target.value})} />
+            </div>
+            <div className="row" style={{justifyContent:"flex-end"}}>
+              <button className="btn" onClick={()=>setShowAddTx(false)}>Annuler</button>
+              <button className="btn btn-dark" onClick={addTx}>Enregistrer</button>
+            </div>
+          </div>
+        )}
+
+        {transactions.length===0 ? (
+          <p className="small muted">Aucune transaction ponctuelle enregistrée.</p>
+        ) : (
+          <div style={{maxHeight:220,overflowY:"auto",marginTop:12}}>
+            {[...transactions].sort((a,b)=>a.date<b.date?1:-1).map(t=>(
+              <div key={t.id} className="row between" style={{fontSize:14,padding:"6px 0",borderBottom:"1px solid #f1f5f9"}}>
+                <div className="row">
+                  <span className="small muted">{new Date(t.date+"T00:00:00").toLocaleDateString("fr-BE")}</span>
+                  <span>{t.label}</span>
+                  {t.category && <span className="small muted">· {t.category}</span>}
+                </div>
+                <div className="row">
+                  <span style={{color: t.type==="expense"?"var(--red)":"var(--green)"}}>{t.type==="expense"?"-":"+"}{fmt(Math.abs(t.amount))}</span>
+                  <button className="btn-ghost" onClick={()=>removeTx(t.id)}>🗑</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <p className="footer-note">Chaque dépense/recette fixe est appliquée au jour du mois défini. Vos données sont sauvegardées de façon sécurisée dans Supabase (accès protégé par mot de passe).</p>
+
+      {showRecurring && (
+        <div className="modal-bg" onClick={()=>setShowRecurring(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div className="row between" style={{marginBottom:12}}>
+              <b>Dépenses fixes & paramètres</b>
+              <button className="btn-ghost" onClick={()=>setShowRecurring(false)}>✕</button>
+            </div>
+
+            <p className="small muted" style={{fontWeight:600}}>Paramètres</p>
+            <div className="row" style={{marginBottom:16}}>
+              <label className="small muted" style={{flex:1}}>Solde au 01/01/2026
+                <input style={{width:"100%",marginTop:4}} type="number" step="0.01" value={settings.openingBalance} onChange={e=>updateSetting("openingBalance",parseFloat(e.target.value)||0)} />
+              </label>
+              <label className="small muted" style={{flex:1}}>Seuil d'alerte
+                <input style={{width:"100%",marginTop:4}} type="number" step="0.01" value={settings.alertThreshold} onChange={e=>updateSetting("alertThreshold",parseFloat(e.target.value)||0)} />
+              </label>
+            </div>
+
+            <p className="small muted" style={{fontWeight:600}}>Dépenses / recettes fixes mensuelles</p>
+            {recurring.map(r=>(
+              <div key={r.id} className="item-row">
+                <span>{r.label}</span>
+                <div className="row">
+                  <span className="small muted">le <input type="number" min="1" max="31" value={r.day||1} style={{width:44,textAlign:"center"}} onChange={e=>updateRecurringDay(r.id, Math.min(31,Math.max(1,parseInt(e.target.value)||1)))} /> du mois</span>
+                  <span style={{color: r.type==="expense"?"var(--red)":"var(--green)"}}>{r.type==="expense"?"-":"+"}{fmt(r.amount)}</span>
+                  <button className="btn-ghost" onClick={()=>removeRecurring(r.id)}>🗑</button>
+                </div>
+              </div>
+            ))}
+            {recurring.length===0 && <p className="small muted">Aucune dépense fixe enregistrée.</p>}
+
+            <div className="card" style={{background:"#f8fafc",marginTop:10}}>
+              <input style={{width:"100%",marginBottom:8}} type="text" placeholder="Nom (ex: Loyer, Assurance...)" value={newRecurring.label} onChange={e=>setNewRecurring({...newRecurring,label:e.target.value})} />
+              <div className="row" style={{marginBottom:8}}>
+                <select style={{flex:1}} value={newRecurring.type} onChange={e=>setNewRecurring({...newRecurring,type:e.target.value})}>
+                  <option value="expense">Dépense</option>
+                  <option value="income">Recette</option>
+                </select>
+                <input style={{flex:1}} type="number" step="0.01" placeholder="Montant €" value={newRecurring.amount} onChange={e=>setNewRecurring({...newRecurring,amount:e.target.value})} />
+                <input style={{width:80}} type="number" min="1" max="31" placeholder="Jour" value={newRecurring.day} onChange={e=>setNewRecurring({...newRecurring,day:e.target.value})} />
+              </div>
+              <button className="btn btn-dark" style={{width:"100%",justifyContent:"center"}} onClick={addRecurring}>+ Ajouter</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// APPLICATION RACINE — gère l'état de connexion
+// ============================================
+function App() {
+  const [session, setSession] = useState(undefined); // undefined = en cours de vérification
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
+
+  if (session === undefined) {
+    return <div className="wrap"><p className="muted">Chargement…</p></div>;
+  }
+
+  if (!session) {
+    return <Login onLoggedIn={setSession} />;
+  }
+
+  return <Tracker onLogout={handleLogout} />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
