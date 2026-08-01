@@ -738,12 +738,12 @@ function Tracker({ onLogout }) {
   if (!data) return <div className="wrap"><p className="muted">Chargement…</p></div>;
 
   const { settings, recurring, transactions } = data;
-  const allCategories = useMemo(() => {
+  const allCategories = (() => {
     const set = new Set();
     (data.categories || []).forEach((c) => c.categorie && set.add(c.categorie));
     transactions.forEach((t) => t.category && set.add(t.category));
     return Array.from(set).sort((a, b) => a.localeCompare(b, "fr"));
-  }, [data.categories, transactions]);
+  })();
   const events = buildEvents(recurring, transactions);
   const weeks = buildWeeks(settings.openingDate);
 
