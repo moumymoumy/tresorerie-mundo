@@ -831,9 +831,15 @@ function Tracker({ onLogout }) {
 
   const addTx = async () => {
     if (!newTx.label || !newTx.amount || !newTx.date) return;
+    const amountValue = parseFloat(newTx.amount);
+    if (isNaN(amountValue) || amountValue <= 0) {
+      setAmountError("Montant invalide : entre un nombre supérieur à 0.");
+      return;
+    }
+    setAmountError("");
     const row = {
       date: newTx.date, label: newTx.label,
-      amount: parseFloat(newTx.amount), type: newTx.type, category: newTx.category,
+      amount: amountValue, type: newTx.type, category: newTx.category,
       source: "manuel",
     };
     const { data: inserted, error } = await supabase.from("Suivi_Tresorerie_transactions").insert(row).select().single();
