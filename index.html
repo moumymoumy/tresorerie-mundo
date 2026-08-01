@@ -1045,6 +1045,7 @@ function Tracker({ onLogout }) {
               </select>
             </div>
             <input style={{width:"100%",marginBottom:8}} type="text" placeholder="Description (ex: Réparation matériel)" value={newTx.label} onChange={e=>setNewTx({...newTx,label:e.target.value})} />
+            {amountError && <div className="save-error" style={{marginBottom:8}}>{amountError}</div>}
             <div className="row" style={{marginBottom:8}}>
               <CategoryInput style={{flex:1}} placeholder="Catégorie (optionnel)" value={newTx.category} onChange={(val)=>setNewTx({...newTx,category:val})} suggestions={allCategories} />
               <input style={{flex:1}} type="number" step="0.01" placeholder="Montant €" value={newTx.amount} onChange={e=>setNewTx({...newTx,amount:e.target.value})} />
