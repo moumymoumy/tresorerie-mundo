@@ -212,8 +212,84 @@ function finalizeTx(tx) {
   };
 }
 
+// ============================================
+// NOUVEAU FORMAT BNP (depuis février) — un PDF par transaction,
+// présentation "Détails de la transaction" (Label / Valeur), sans tableau.
+// ============================================
+function isIndividualTransactionPdf(lines) {
+  return lines.some((l) => /D[ée]tails de la transaction/i.test(lineText(l)));
+}
+
+function parseIndividualTransactionText(lines) {
+  const texts = lines.map(lineText).filter(Boolean);
+  const get = (re) => {
+    for (const t of texts) {
+      const m = t.match(re);
+      if (m) return m[1].trim();
+    }
+    return null;
+  };
+
+  const deVal = get(/^De\s+(.*)$/);
+  const versVal = get(/^Vers\s+(.*)$/);
+  const montantStr = get(/^Montant\s+(.*)$/);
+  const dateExec = get(/^Date d.ex[ée]cution\s+(.*)$/i);
+  const dateCompta = get(/^Date de comptabilisation\s+(.*)$/i);
+  const numSeq = get(/^N[°o]?\s*de\s*s[ée]quence\s+(.*)$/i);
+
+  // Le bloc "Détails" peut s'étaler sur plusieurs lignes visuelles
+  const detailsStartIdx = texts.findIndex((t) => /^D[ée]tails\s/i.test(t) && !/^D[ée]tails de la transaction/i.test(t));
+  let detailsText = "";
+  if (detailsStartIdx !== -1) {
+    const collected = [texts[detailsStartIdx].replace(/^D[ée]tails\s*/i, "")];
+    for (let i = detailsStartIdx + 1; i < texts.length; i++) {
+      if (/^N[°o]?\s*de\s*s[ée]quence/i.test(texts[i])) break;
+      collected.push(texts[i]);
+    }
+    detailsText = collected.join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  if (!montantStr || !dateExec) return null;
+
+  const montantMatch = montantStr.match(/(-?)\s*([\d.,]+)\s*EUR/i);
+  const sign = montantMatch && montantMatch[1] === "-" ? "-" : "+";
+  const montant = montantMatch ? parseMontantBE(montantMatch[2], sign) : 0;
+
+  const execMatch = dateExec.match(/(\d{2})\.(\d{2})\.(\d{4})/);
+  const dateOperation = execMatch ? `${execMatch[3]}-${execMatch[2]}-${execMatch[1]}` : null;
+
+  const refMatch = detailsText.match(/R[ée]f[ée]rence banque\s*:\s*(\S+)/i);
+  const dateValeurMatch = detailsText.match(/Date valeur\s*:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+
+  let dateValeur = dateOperation;
+  if (dateValeurMatch) {
+    dateValeur = `${dateValeurMatch[3]}-${dateValeurMatch[2]}-${dateValeurMatch[1]}`;
+  } else if (dateCompta) {
+    const c = dateCompta.match(/(\d{2})\.(\d{2})\.(\d{4})/);
+    if (c) dateValeur = `${c[3]}-${c[2]}-${c[1]}`;
+  }
+
+  const contrepartie = (sign === "-" ? versVal : deVal) || "";
+
+  return {
+    tempId: "p" + Math.random().toString(36).slice(2),
+    numero: numSeq || "",
+    description: detailsText || contrepartie,
+    contrepartie,
+    dateOperation,
+    dateValeur,
+    montant,
+    type: sign === "-" ? "expense" : "income",
+    referenceBanque: refMatch ? refMatch[1] : null,
+  };
+}
+
 async function parsePdfToTransactions(file) {
   const lines = await extractLinesFromPdf(file);
+  if (isIndividualTransactionPdf(lines)) {
+    const tx = parseIndividualTransactionText(lines);
+    return tx ? [tx] : [];
+  }
   return buildTransactionsFromLines(lines);
 }
 
