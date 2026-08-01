@@ -411,9 +411,12 @@ function ImportPdf({ categories, existingTransactions, onClose, onImported }) {
       }
       const withCategory = allParsed.map((tx, idx) => {
         const duplicateInBatch = allParsed.some((other, otherIdx) => otherIdx !== idx && other.dateOperation === tx.dateOperation && Math.abs(other.montant - tx.montant) < 0.01);
+        const proposedCat = proposeCategory(tx.description, categories);
+        const guessedKeyword = (tx.description.match(/\b[A-ZÀ-Ý]{3,}\b/) || [""])[0];
         return {
           ...tx,
-          category: proposeCategory(tx.description, categories),
+          category: proposedCat,
+          motCle: guessedKeyword,
           duplicate: isProbableDuplicate(tx, existingTransactions) || duplicateInBatch,
         };
       });
@@ -441,10 +444,9 @@ function ImportPdf({ categories, existingTransactions, onClose, onImported }) {
       // Si la catégorie proposée a été gardée ou modifiée (et n'est pas vide), on mémorise
       // le mot-clé pour la prochaine fois — seulement si ce n'est pas déjà connu.
       if (row.category && row.category !== "À catégoriser") {
-        const alreadyKnown = categories.some((c) => row.description.toUpperCase().includes(c.mot_cle.toUpperCase()));
-        if (!alreadyKnown) {
-          const motCle = (row.description.split(" ").find((w) => w.length > 3) || row.description).toUpperCase();
-          await supabase.from("Suivi_Tresorerie_categories").insert({ mot_cle: motCle, categorie: row.category });
+        const alreadyKnown = row.motCle && categories.some((c) => c.mot_cle.toUpperCase() === row.motCle.toUpperCase());
+        if (!alreadyKnown && row.motCle && row.motCle.trim()) {
+          await supabase.from("Suivi_Tresorerie_categories").insert({ mot_cle: row.motCle.trim().toUpperCase(), categorie: row.category });
         }
       }
       await supabase.from("Suivi_Tresorerie_transactions").insert({
@@ -517,9 +519,18 @@ function ImportPdf({ categories, existingTransactions, onClose, onImported }) {
                       <td className="right" style={{color: r.type==="expense"?"var(--red)":"var(--green)"}}>{r.type==="expense"?"-":"+"}{fmt(Math.abs(r.montant))}</td>
                       <td>
                         <input
-                          style={{width:120,fontSize:12}}
+                          style={{width:120,fontSize:12,display:"block",marginBottom:4}}
                           value={r.category}
+                          placeholder="Catégorie"
+                          disabled={status[r.tempId] === "imported"}
                           onChange={(e) => updateRow(r.tempId, { category: e.target.value })}
+                        />
+                        <input
+                          style={{width:120,fontSize:12}}
+                          value={r.motCle}
+                          placeholder="Mot-clé à retenir"
+                          disabled={status[r.tempId] === "imported"}
+                          onChange={(e) => updateRow(r.tempId, { motCle: e.target.value })}
                         />
                         {r.duplicate && status[r.tempId] === "pending" && (
                           <div className="small" style={{color:"var(--amber)",marginTop:4}}>
@@ -569,6 +580,8 @@ function Tracker({ onLogout }) {
   const [showImportPdf, setShowImportPdf] = useState(false);
   const [sortKey, setSortKey] = useState("dateValeur");
   const [sortDir, setSortDir] = useState("desc");
+  const [editingCategoryId, setEditingCategoryId] = useState(null);
+  const [editingCategoryValue, setEditingCategoryValue] = useState("");
 
   if (loadError) {
     return (
@@ -679,6 +692,15 @@ function Tracker({ onLogout }) {
     if (error) { setSaveError(true); return; }
     setSaveError(false);
     setDataState({ ...data, transactions: transactions.filter((t) => t.id !== id) });
+  };
+
+  const saveCategoryEdit = async (id) => {
+    const newCategory = editingCategoryValue.trim() || null;
+    const { error } = await supabase.from("Suivi_Tresorerie_transactions").update({ category: newCategory }).eq("id", id);
+    if (error) { setSaveError(true); return; }
+    setSaveError(false);
+    setDataState({ ...data, transactions: transactions.map((t) => (t.id === id ? { ...t, category: newCategory } : t)) });
+    setEditingCategoryId(null);
   };
 
   const updateSetting = async (key, value) => {
@@ -802,6 +824,7 @@ function Tracker({ onLogout }) {
                 <th style={{cursor:"pointer"}} onClick={() => toggleSort("label")}>Description {sortKey==="label" ? (sortDir==="asc"?"▲":"▼") : ""}</th>
                 <th style={{cursor:"pointer"}} onClick={() => toggleSort("category")}>Catégorie {sortKey==="category" ? (sortDir==="asc"?"▲":"▼") : ""}</th>
                 <th className="right" style={{cursor:"pointer"}} onClick={() => toggleSort("amount")}>Montant {sortKey==="amount" ? (sortDir==="asc"?"▲":"▼") : ""}</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -809,12 +832,31 @@ function Tracker({ onLogout }) {
                 <tr key={t.id}>
                   <td className="muted" style={{whiteSpace:"nowrap"}}>{t.dateValeur ? new Date(t.dateValeur+"T00:00:00").toLocaleDateString("fr-BE") : "—"}</td>
                   <td style={{maxWidth:360}}>{t.label}</td>
-                  <td className="muted">{t.category || "—"}</td>
+                  <td className="muted">
+                    {editingCategoryId === t.id ? (
+                      <div className="row" style={{gap:4}}>
+                        <input
+                          style={{width:110,fontSize:12}}
+                          value={editingCategoryValue}
+                          onChange={(e) => setEditingCategoryValue(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") saveCategoryEdit(t.id); }}
+                          autoFocus
+                        />
+                        <button className="btn-ghost" style={{padding:"2px 4px"}} onClick={() => saveCategoryEdit(t.id)}>✓</button>
+                        <button className="btn-ghost" style={{padding:"2px 4px"}} onClick={() => setEditingCategoryId(null)}>✕</button>
+                      </div>
+                    ) : (
+                      <span style={{cursor:"pointer"}} onClick={() => { setEditingCategoryId(t.id); setEditingCategoryValue(t.category || ""); }}>
+                        {t.category || "—"} <span className="small muted">✎</span>
+                      </span>
+                    )}
+                  </td>
                   <td className="right" style={{color: t.type==="expense"?"var(--red)":"var(--green)"}}>{t.type==="expense"?"-":"+"}{fmt(Math.abs(t.amount))}</td>
+                  <td><button className="btn-ghost" onClick={()=>removeTx(t.id)}>🗑</button></td>
                 </tr>
               ))}
               {sortedTransactions.length===0 && (
-                <tr><td colSpan="4" className="small muted" style={{padding:16}}>Aucune transaction enregistrée.</td></tr>
+                <tr><td colSpan="5" className="small muted" style={{padding:16}}>Aucune transaction enregistrée.</td></tr>
               )}
             </tbody>
           </table>
