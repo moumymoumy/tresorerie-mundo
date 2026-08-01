@@ -392,29 +392,38 @@ function ImportPdf({ categories, existingTransactions, onClose, onImported }) {
   const [importing, setImporting] = useState(false);
 
   const handleFile = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
     setParseError("");
     setParsing(true);
     try {
-      const parsed = await parsePdfToTransactions(file);
-      if (parsed.length === 0) {
-        setParseError("Aucune transaction détectée dans ce PDF. Le format de ce relevé ne correspond peut-être pas exactement à ce que l'outil sait reconnaître pour l'instant.");
+      let allParsed = [];
+      for (const file of files) {
+        const parsed = await parsePdfToTransactions(file);
+        if (parsed.length === 0) {
+          setParseError((prev) => (prev ? prev + " " : "") + `Aucune transaction détectée dans "${file.name}".`);
+        }
+        allParsed = allParsed.concat(parsed);
+      }
+      if (allParsed.length === 0) {
         setParsing(false);
         return;
       }
-      const withCategory = parsed.map((tx) => ({
-        ...tx,
-        category: proposeCategory(tx.description, categories),
-        duplicate: isProbableDuplicate(tx, existingTransactions),
-      }));
+      const withCategory = allParsed.map((tx, idx) => {
+        const duplicateInBatch = allParsed.some((other, otherIdx) => otherIdx !== idx && other.dateOperation === tx.dateOperation && Math.abs(other.montant - tx.montant) < 0.01);
+        return {
+          ...tx,
+          category: proposeCategory(tx.description, categories),
+          duplicate: isProbableDuplicate(tx, existingTransactions) || duplicateInBatch,
+        };
+      });
       setRows(withCategory);
       const initStatus = {};
       withCategory.forEach((r) => { initStatus[r.tempId] = "pending"; });
       setStatus(initStatus);
     } catch (err) {
       console.error(err);
-      setParseError("Impossible de lire ce PDF. Vérifie qu'il s'agit bien d'un extrait BNP Paribas Fortis au format habituel.");
+      setParseError("Impossible de lire un ou plusieurs de ces PDF. Vérifie qu'il s'agit bien d'extraits BNP Paribas Fortis au format habituel.");
     }
     setParsing(false);
   };
@@ -479,7 +488,8 @@ function ImportPdf({ categories, existingTransactions, onClose, onImported }) {
 
         {rows.length === 0 && (
           <div>
-            <input type="file" accept="application/pdf" onChange={handleFile} disabled={parsing} />
+            <input type="file" accept="application/pdf" multiple onChange={handleFile} disabled={parsing} />
+            <p className="small muted" style={{marginTop:6}}>Tu peux sélectionner plusieurs fichiers PDF à la fois (maintiens Ctrl ou Cmd enfoncé pour en choisir plusieurs).</p>
             {parsing && <p className="small muted" style={{marginTop:8}}>Lecture du PDF en cours…</p>}
             {parseError && <div className="save-error" style={{marginTop:8}}>{parseError}</div>}
           </div>
