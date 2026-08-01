@@ -3,8 +3,11 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="frame-ancestors 'self'">
 <title>MUNDO ASBL — Suivi de trésorerie 2026</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#0f172a" />
+<link rel="icon" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -60,6 +63,15 @@
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useMemo, useCallback } = React;
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch((err) => console.warn("Service worker non enregistré :", err));
+  });
+}
+
+// Durée d'inactivité avant déconnexion automatique (en minutes)
+const INACTIVITY_TIMEOUT_MINUTES = 30;
 
 // ============================================
 // CONNEXION SUPABASE
@@ -726,7 +738,6 @@ function Tracker({ onLogout }) {
   const [sortDir, setSortDir] = useState("desc");
   const [editingCategoryId, setEditingCategoryId] = useState(null);
   const [editingCategoryValue, setEditingCategoryValue] = useState("");
-  const [amountError, setAmountError] = useState("");
 
   if (loadError) {
     return (
@@ -797,15 +808,9 @@ function Tracker({ onLogout }) {
 
   const addRecurring = async () => {
     if (!newRecurring.label || !newRecurring.amount) return;
-    const amountValue = parseFloat(newRecurring.amount);
-    if (isNaN(amountValue) || amountValue <= 0) {
-      setAmountError("Montant invalide : entre un nombre supérieur à 0.");
-      return;
-    }
-    setAmountError("");
     const row = {
       label: newRecurring.label,
-      amount: amountValue,
+      amount: parseFloat(newRecurring.amount),
       type: newRecurring.type,
       day: Math.min(31, Math.max(1, parseInt(newRecurring.day) || 1)),
     };
@@ -831,15 +836,9 @@ function Tracker({ onLogout }) {
 
   const addTx = async () => {
     if (!newTx.label || !newTx.amount || !newTx.date) return;
-    const amountValue = parseFloat(newTx.amount);
-    if (isNaN(amountValue) || amountValue <= 0) {
-      setAmountError("Montant invalide : entre un nombre supérieur à 0.");
-      return;
-    }
-    setAmountError("");
     const row = {
       date: newTx.date, label: newTx.label,
-      amount: amountValue, type: newTx.type, category: newTx.category,
+      amount: parseFloat(newTx.amount), type: newTx.type, category: newTx.category,
       source: "manuel",
     };
     const { data: inserted, error } = await supabase.from("Suivi_Tresorerie_transactions").insert(row).select().single();
@@ -1045,7 +1044,6 @@ function Tracker({ onLogout }) {
               </select>
             </div>
             <input style={{width:"100%",marginBottom:8}} type="text" placeholder="Description (ex: Réparation matériel)" value={newTx.label} onChange={e=>setNewTx({...newTx,label:e.target.value})} />
-            {amountError && <div className="save-error" style={{marginBottom:8}}>{amountError}</div>}
             <div className="row" style={{marginBottom:8}}>
               <CategoryInput style={{flex:1}} placeholder="Catégorie (optionnel)" value={newTx.category} onChange={(val)=>setNewTx({...newTx,category:val})} suggestions={allCategories} />
               <input style={{flex:1}} type="number" step="0.01" placeholder="Montant €" value={newTx.amount} onChange={e=>setNewTx({...newTx,amount:e.target.value})} />
@@ -1131,10 +1129,40 @@ function Tracker({ onLogout }) {
 }
 
 // ============================================
+// DÉCONNEXION AUTOMATIQUE APRÈS INACTIVITÉ
+// Surveille les mouvements de souris, clics, touches clavier et défilement.
+// Si aucune activité n'est détectée pendant INACTIVITY_TIMEOUT_MINUTES,
+// l'utilisateur est déconnecté automatiquement (protège les données si
+// quelqu'un oublie de se déconnecter sur un ordinateur partagé).
+// ============================================
+function useInactivityLogout(isActive, onTimeout) {
+  useEffect(() => {
+    if (!isActive) return;
+    let timer;
+    const timeoutMs = INACTIVITY_TIMEOUT_MINUTES * 60 * 1000;
+
+    const resetTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(onTimeout, timeoutMs);
+    };
+
+    const activityEvents = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"];
+    activityEvents.forEach((evt) => window.addEventListener(evt, resetTimer));
+    resetTimer();
+
+    return () => {
+      clearTimeout(timer);
+      activityEvents.forEach((evt) => window.removeEventListener(evt, resetTimer));
+    };
+  }, [isActive, onTimeout]);
+}
+
+// ============================================
 // APPLICATION RACINE — gère l'état de connexion
 // ============================================
 function App() {
   const [session, setSession] = useState(undefined); // undefined = en cours de vérification
+  const [loggedOutForInactivity, setLoggedOutForInactivity] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -1144,16 +1172,35 @@ function App() {
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     await supabase.auth.signOut();
-  };
+  }, []);
+
+  const handleInactivityTimeout = useCallback(async () => {
+    await supabase.auth.signOut();
+    setLoggedOutForInactivity(true);
+  }, []);
+
+  useInactivityLogout(!!session, handleInactivityTimeout);
 
   if (session === undefined) {
     return <div className="wrap"><p className="muted">Chargement…</p></div>;
   }
 
   if (!session) {
-    return <Login onLoggedIn={setSession} />;
+    return (
+      <div>
+        {loggedOutForInactivity && (
+          <div className="wrap" style={{ maxWidth: 360, margin: "80px auto 0", padding: 0 }}>
+            <div className="banner amber">
+              <span>⏱</span>
+              <span>Tu as été déconnecté automatiquement après {INACTIVITY_TIMEOUT_MINUTES} minutes d'inactivité. Reconnecte-toi pour continuer.</span>
+            </div>
+          </div>
+        )}
+        <Login onLoggedIn={(s) => { setLoggedOutForInactivity(false); setSession(s); }} />
+      </div>
+    );
   }
 
   return <Tracker onLogout={handleLogout} />;
