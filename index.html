@@ -634,12 +634,24 @@ function ImportPdf({ categories, existingCategories, existingTransactions, onClo
     setStatus(newStatus);
   };
 
+  const pendingCount = rows.filter((r) => status[r.tempId] !== "imported").length;
+
+  const handleClose = () => {
+    if (pendingCount > 0) {
+      const ok = window.confirm(
+        `${pendingCount} ligne(s) n'ont pas encore été importées. Si tu fermes maintenant, elles seront perdues et il faudra réimporter le PDF. Fermer quand même ?`
+      );
+      if (!ok) return;
+    }
+    onClose();
+  };
+
   return (
-    <div className="modal-bg" onClick={onClose}>
-      <div className="modal" style={{maxWidth: 1000}} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-bg">
+      <div className="modal" style={{maxWidth: 1000}}>
         <div className="row between" style={{marginBottom:12}}>
           <b>Importer un extrait PDF</b>
-          <button className="btn-ghost" onClick={onClose}>✕</button>
+          <button className="btn-ghost" onClick={handleClose}>✕</button>
         </div>
 
         {rows.length === 0 && (
