@@ -122,9 +122,9 @@ async function extractLinesFromPdf(file) {
   return lines;
 }
 
-const DATE_ONLY_RE = /^(\d{2})-(\d{2})-(\d{4})$/;
+const DATE_ONLY_RE = /^(\d{2})\s*-\s*(\d{2})\s*-\s*(\d{4})$/;
 const TX_START_RE = /^(\d{3,4})\s+(.*)$/;
-const LAST_LINE_RE = /(\d{2}-\d{2})\s+([\d.,]+)\s*([+-])\s*$/;
+const LAST_LINE_RE = /(\d{2}\s*-\s*\d{2})\s+([\d.,]+)\s*([+-])\s*$/;
 
 function buildTransactionsFromLines(lines) {
   const results = [];
@@ -162,7 +162,7 @@ function buildTransactionsFromLines(lines) {
     if (current) {
       const lastMatch = text.match(LAST_LINE_RE);
       if (lastMatch) {
-        current.dateValeur = lastMatch[1];
+        current.dateValeur = lastMatch[1].replace(/\s+/g, "");
         current.montantStr = lastMatch[2];
         current.sign = lastMatch[3];
         flush();
@@ -382,6 +382,11 @@ function ImportPdf({ categories, existingTransactions, onClose, onImported }) {
     setParsing(true);
     try {
       const parsed = await parsePdfToTransactions(file);
+      if (parsed.length === 0) {
+        setParseError("Aucune transaction détectée dans ce PDF. Le format de ce relevé ne correspond peut-être pas exactement à ce que l'outil sait reconnaître pour l'instant.");
+        setParsing(false);
+        return;
+      }
       const withCategory = parsed.map((tx) => ({
         ...tx,
         category: proposeCategory(tx.description, categories),
