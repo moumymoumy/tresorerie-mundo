@@ -8,6 +8,7 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
 <style>
   :root{
     --bg:#f8fafc; --card:#ffffff; --border:#e2e8f0; --text:#1e293b; --muted:#64748b;
@@ -67,11 +68,150 @@ const SUPABASE_URL = "https://gfpqwigfhbnvlhctnmxr.supabase.co";
 const SUPABASE_KEY = "sb_publishable_x329McO5udm-w_04xqQmFg_ZFijAfrD";
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js";
+
 const MONTHS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 
 const fmt = (n) => new Intl.NumberFormat("fr-BE", { style: "currency", currency: "EUR" }).format(n || 0);
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const shortDate = (d) => d.toLocaleDateString("fr-BE", { day: "2-digit", month: "2-digit" });
+
+// ============================================
+// LECTURE DES EXTRAITS PDF (BNP Paribas Fortis)
+// ============================================
+
+// Un montant belge s'écrit "1.245,50" (point = milliers, virgule = décimales)
+function parseMontantBE(str, sign) {
+  if (!str) return 0;
+  const cleaned = str.replace(/\./g, "").replace(",", ".");
+  const val = parseFloat(cleaned) || 0;
+  return sign === "-" ? -val : val;
+}
+
+function lineText(line) {
+  return line.items.map((i) => i.text).join(" ").replace(/\s+/g, " ").trim();
+}
+
+// Récupère le texte présent uniquement dans une tranche horizontale de la page
+// (utilisé pour isoler la colonne "Contrepartie")
+function bucketText(line, minX, maxX) {
+  return line.items.filter((i) => i.x >= minX && i.x < maxX).map((i) => i.text).join(" ").trim();
+}
+
+async function extractLinesFromPdf(file) {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const lines = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const viewport = page.getViewport({ scale: 1 });
+    const content = await page.getTextContent();
+    const width = viewport.width;
+    const byY = {};
+    content.items.forEach((item) => {
+      const y = Math.round(item.transform[5]);
+      if (!byY[y]) byY[y] = [];
+      byY[y].push({ x: item.transform[4], text: item.str });
+    });
+    const ys = Object.keys(byY).map(Number).sort((a, b) => b - a);
+    ys.forEach((y) => {
+      const items = byY[y].sort((a, b) => a.x - b.x);
+      lines.push({ page: p, width, items });
+    });
+  }
+  return lines;
+}
+
+const DATE_ONLY_RE = /^(\d{2})-(\d{2})-(\d{4})$/;
+const TX_START_RE = /^(\d{3,4})\s+(.*)$/;
+const LAST_LINE_RE = /(\d{2}-\d{2})\s+([\d.,]+)\s*([+-])\s*$/;
+
+function buildTransactionsFromLines(lines) {
+  const results = [];
+  let currentDate = null;
+  let current = null;
+
+  const flush = () => {
+    if (current && current.montantStr) {
+      results.push(finalizeTx(current));
+    }
+    current = null;
+  };
+
+  lines.forEach((line) => {
+    const text = lineText(line);
+    if (!text) return;
+
+    if (/^Solde/.test(text)) { flush(); return; }
+
+    const dateOnly = text.match(DATE_ONLY_RE);
+    if (dateOnly) {
+      flush();
+      currentDate = `${dateOnly[3]}-${dateOnly[2]}-${dateOnly[1]}`;
+      return;
+    }
+
+    const txStart = text.match(TX_START_RE);
+    if (txStart && currentDate && !current) {
+      current = { numero: txStart[1], dateOperation: currentDate, descLines: [text], contrepartieLines: [] };
+      const c = bucketText(line, line.width * 0.45, line.width * 0.75);
+      if (c) current.contrepartieLines.push(c);
+      return;
+    }
+
+    if (current) {
+      const lastMatch = text.match(LAST_LINE_RE);
+      if (lastMatch) {
+        current.dateValeur = lastMatch[1];
+        current.montantStr = lastMatch[2];
+        current.sign = lastMatch[3];
+        flush();
+        return;
+      }
+      current.descLines.push(text);
+      const c = bucketText(line, line.width * 0.45, line.width * 0.75);
+      if (c) current.contrepartieLines.push(c);
+    }
+  });
+  flush();
+  return results;
+}
+
+function finalizeTx(tx) {
+  const description = tx.descLines.join(" ").replace(/\s+/g, " ").trim();
+  const contrepartie = tx.contrepartieLines.join(" ").replace(/\s+/g, " ").trim();
+  const refMatch = description.match(/R[ée]f[ée]rence banque\s*:\s*(\S+)/i);
+  const montant = parseMontantBE(tx.montantStr, tx.sign);
+  const [dd, mm] = (tx.dateValeur || "").split("-");
+  const year = tx.dateOperation ? tx.dateOperation.slice(0, 4) : String(new Date().getFullYear());
+  const dateValeurISO = dd && mm ? `${year}-${mm}-${dd}` : null;
+  return {
+    tempId: "p" + Math.random().toString(36).slice(2),
+    numero: tx.numero,
+    description,
+    contrepartie,
+    dateOperation: tx.dateOperation,
+    dateValeur: dateValeurISO,
+    montant,
+    type: tx.sign === "-" ? "expense" : "income",
+    referenceBanque: refMatch ? refMatch[1] : null,
+  };
+}
+
+async function parsePdfToTransactions(file) {
+  const lines = await extractLinesFromPdf(file);
+  return buildTransactionsFromLines(lines);
+}
+
+function proposeCategory(description, categories) {
+  const upper = description.toUpperCase();
+  const match = categories.find((c) => upper.includes(c.mot_cle.toUpperCase()));
+  return match ? match.categorie : "À catégoriser";
+}
+
+function isProbableDuplicate(candidate, existingTransactions) {
+  return existingTransactions.some((t) => t.date === candidate.dateOperation && Math.abs(t.amount - Math.abs(candidate.montant)) < 0.01);
+}
 
 // ============================================
 // ÉCRAN DE CONNEXION
@@ -118,14 +258,16 @@ function useTrackerData() {
   const loadAll = useCallback(async () => {
     setLoadError(false);
     try {
-      const [settingsRes, recurringRes, txRes] = await Promise.all([
+      const [settingsRes, recurringRes, txRes, catRes] = await Promise.all([
         supabase.from("Suivi_Tresorerie_settings").select("*").eq("id", 1).single(),
         supabase.from("Suivi_Tresorerie_recurring").select("*").order("created_at"),
         supabase.from("Suivi_Tresorerie_transactions").select("*").order("date"),
+        supabase.from("Suivi_Tresorerie_categories").select("*").order("created_at"),
       ]);
       if (settingsRes.error) throw settingsRes.error;
       if (recurringRes.error) throw recurringRes.error;
       if (txRes.error) throw txRes.error;
+      if (catRes.error) throw catRes.error;
 
       setDataState({
         settings: {
@@ -139,6 +281,7 @@ function useTrackerData() {
         transactions: txRes.data.map(t => ({
           id: t.id, date: t.date, label: t.label, amount: t.amount, type: t.type, category: t.category,
         })),
+        categories: catRes.data,
       });
     } catch (e) {
       console.error(e);
@@ -222,6 +365,169 @@ function MiniChart({ points, threshold }) {
   );
 }
 
+// ============================================
+// IMPORT PDF — tableau de vérification
+// ============================================
+function ImportPdf({ categories, existingTransactions, onClose, onImported }) {
+  const [rows, setRows] = useState([]);
+  const [status, setStatus] = useState({}); // tempId -> "pending" | "validated" | "skipped"
+  const [parsing, setParsing] = useState(false);
+  const [parseError, setParseError] = useState("");
+  const [importing, setImporting] = useState(false);
+
+  const handleFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setParseError("");
+    setParsing(true);
+    try {
+      const parsed = await parsePdfToTransactions(file);
+      const withCategory = parsed.map((tx) => ({
+        ...tx,
+        category: proposeCategory(tx.description, categories),
+        duplicate: isProbableDuplicate(tx, existingTransactions),
+      }));
+      setRows(withCategory);
+      const initStatus = {};
+      withCategory.forEach((r) => { initStatus[r.tempId] = "pending"; });
+      setStatus(initStatus);
+    } catch (err) {
+      console.error(err);
+      setParseError("Impossible de lire ce PDF. Vérifie qu'il s'agit bien d'un extrait BNP Paribas Fortis au format habituel.");
+    }
+    setParsing(false);
+  };
+
+  const updateRow = (tempId, patch) => {
+    setRows((prev) => prev.map((r) => (r.tempId === tempId ? { ...r, ...patch } : r)));
+  };
+
+  const validateRow = (tempId) => setStatus((s) => ({ ...s, [tempId]: "validated" }));
+  const skipRow = (tempId) => setStatus((s) => ({ ...s, [tempId]: "skipped" }));
+
+  const importRows = async (rowsToImport) => {
+    setImporting(true);
+    for (const row of rowsToImport) {
+      // Si la catégorie proposée a été gardée ou modifiée (et n'est pas vide), on mémorise
+      // le mot-clé pour la prochaine fois — seulement si ce n'est pas déjà connu.
+      if (row.category && row.category !== "À catégoriser") {
+        const alreadyKnown = categories.some((c) => row.description.toUpperCase().includes(c.mot_cle.toUpperCase()));
+        if (!alreadyKnown) {
+          const motCle = (row.description.split(" ").find((w) => w.length > 3) || row.description).toUpperCase();
+          await supabase.from("Suivi_Tresorerie_categories").insert({ mot_cle: motCle, categorie: row.category });
+        }
+      }
+      await supabase.from("Suivi_Tresorerie_transactions").insert({
+        date: row.dateOperation,
+        label: row.description,
+        amount: Math.abs(row.montant),
+        type: row.type,
+        category: row.category === "À catégoriser" ? null : row.category,
+        numero_operation: row.numero,
+        contrepartie: row.contrepartie || null,
+        date_valeur: row.dateValeur,
+        reference_banque: row.referenceBanque,
+        source: "import",
+      });
+    }
+    setImporting(false);
+    onImported();
+  };
+
+  const handleImportOne = async (row) => {
+    await importRows([row]);
+    setStatus((s) => ({ ...s, [row.tempId]: "imported" }));
+  };
+
+  const handleImportAll = async () => {
+    const toImport = rows.filter((r) => status[r.tempId] === "validated");
+    if (toImport.length === 0) return;
+    await importRows(toImport);
+    const newStatus = { ...status };
+    toImport.forEach((r) => { newStatus[r.tempId] = "imported"; });
+    setStatus(newStatus);
+  };
+
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal" style={{maxWidth: 1000}} onClick={(e) => e.stopPropagation()}>
+        <div className="row between" style={{marginBottom:12}}>
+          <b>Importer un extrait PDF</b>
+          <button className="btn-ghost" onClick={onClose}>✕</button>
+        </div>
+
+        {rows.length === 0 && (
+          <div>
+            <input type="file" accept="application/pdf" onChange={handleFile} disabled={parsing} />
+            {parsing && <p className="small muted" style={{marginTop:8}}>Lecture du PDF en cours…</p>}
+            {parseError && <div className="save-error" style={{marginTop:8}}>{parseError}</div>}
+          </div>
+        )}
+
+        {rows.length > 0 && (
+          <div>
+            <p className="small muted">{rows.length} transaction(s) détectée(s). Vérifie chaque ligne avant import.</p>
+            <div className="tbl-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>N°</th><th>Description</th><th>Contrepartie</th><th>Date opération</th>
+                    <th>Date valeur</th><th className="right">Montant</th><th>Catégorie proposée</th><th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.tempId} style={{opacity: status[r.tempId] === "skipped" ? 0.4 : 1}}>
+                      <td>{r.numero}</td>
+                      <td style={{maxWidth:220,fontSize:12}}>{r.description}</td>
+                      <td style={{fontSize:12}}>{r.contrepartie || "—"}</td>
+                      <td>{r.dateOperation}</td>
+                      <td>{r.dateValeur || "—"}</td>
+                      <td className="right" style={{color: r.type==="expense"?"var(--red)":"var(--green)"}}>{r.type==="expense"?"-":"+"}{fmt(Math.abs(r.montant))}</td>
+                      <td>
+                        <input
+                          style={{width:120,fontSize:12}}
+                          value={r.category}
+                          onChange={(e) => updateRow(r.tempId, { category: e.target.value })}
+                        />
+                        {r.duplicate && status[r.tempId] === "pending" && (
+                          <div className="small" style={{color:"var(--amber)",marginTop:4}}>
+                            Doublon possible.
+                            <button className="btn-ghost" style={{padding:"2px 4px"}} onClick={() => updateRow(r.tempId, { duplicate: false })}>Non, importer</button>
+                            <button className="btn-ghost" style={{padding:"2px 4px"}} onClick={() => skipRow(r.tempId)}>Oui, ignorer</button>
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        {status[r.tempId] === "imported" ? (
+                          <span className="small" style={{color:"var(--green)"}}>Importé ✓</span>
+                        ) : status[r.tempId] === "skipped" ? (
+                          <span className="small muted">Ignoré</span>
+                        ) : status[r.tempId] === "validated" ? (
+                          <button className="btn" style={{fontSize:12}} onClick={() => handleImportOne(r)} disabled={importing}>Importer</button>
+                        ) : (
+                          <div className="row" style={{gap:4}}>
+                            <button className="btn" style={{fontSize:12,padding:"4px 8px"}} onClick={() => validateRow(r.tempId)} disabled={r.duplicate}>Valider</button>
+                            <button className="btn-ghost" style={{fontSize:12}} onClick={() => skipRow(r.tempId)}>Ignorer</button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="row between" style={{marginTop:12}}>
+              <span className="small muted">{rows.filter(r=>status[r.tempId]==="validated").length} validée(s) en attente d'import</span>
+              <button className="btn btn-dark" onClick={handleImportAll} disabled={importing}>Importer tout ce qui est validé</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Tracker({ onLogout }) {
   const { data, setDataState, saveError, setSaveError, loadError, reload } = useTrackerData();
   const [tab, setTab] = useState("hebdo");
@@ -229,6 +535,7 @@ function Tracker({ onLogout }) {
   const [showAddTx, setShowAddTx] = useState(false);
   const [newRecurring, setNewRecurring] = useState({ label: "", amount: "", type: "expense", day: "1" });
   const [newTx, setNewTx] = useState({ date: todayISO(), label: "", amount: "", type: "expense", category: "" });
+  const [showImportPdf, setShowImportPdf] = useState(false);
 
   if (loadError) {
     return (
@@ -336,10 +643,20 @@ function Tracker({ onLogout }) {
           </div>
         </div>
         <div className="row">
+          <button className="btn" onClick={() => setShowImportPdf(true)}>📄 Importer un extrait PDF</button>
           <button className="btn" onClick={() => setShowRecurring(true)}>⚙ Dépenses fixes & paramètres</button>
           <button className="btn" onClick={onLogout}>Déconnexion</button>
         </div>
       </div>
+
+      {showImportPdf && (
+        <ImportPdf
+          categories={data.categories || []}
+          existingTransactions={transactions}
+          onClose={() => setShowImportPdf(false)}
+          onImported={reload}
+        />
+      )}
 
       {saveError && <div className="save-error" style={{marginTop:12}}>La sauvegarde vers Supabase a échoué. Vérifie ta connexion, tes modifications récentes n'ont peut-être pas été enregistrées.</div>}
 
