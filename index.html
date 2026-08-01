@@ -151,25 +151,39 @@ function buildTransactionsFromLines(lines) {
       return;
     }
 
-    const txStart = text.match(TX_START_RE);
-    if (txStart && currentDate && !current) {
-      current = { numero: txStart[1], dateOperation: currentDate, descLines: [text], contrepartieLines: [] };
-      const c = bucketText(line, line.width * 0.45, line.width * 0.75);
+    const txMatch = text.match(TX_START_RE);
+    if (txMatch && currentDate) {
+      // Nouvelle transaction. Sur ces relevés, le N°, le début de la description,
+      // la date valeur et le montant apparaissent sur cette même première ligne.
+      flush();
+      current = { numero: txMatch[1], dateOperation: currentDate, descLines: [], contrepartieLines: [] };
+      let rest = txMatch[2];
+      const lastMatch = rest.match(LAST_LINE_RE);
+      if (lastMatch) {
+        current.dateValeur = lastMatch[1].replace(/\s+/g, "");
+        current.montantStr = lastMatch[2];
+        current.sign = lastMatch[3];
+        rest = rest.slice(0, lastMatch.index).trim();
+      }
+      if (rest) current.descLines.push(rest);
+      const c = bucketText(line, line.width * 0.50, line.width * 0.72);
       if (c) current.contrepartieLines.push(c);
       return;
     }
 
     if (current) {
-      const lastMatch = text.match(LAST_LINE_RE);
-      if (lastMatch) {
-        current.dateValeur = lastMatch[1].replace(/\s+/g, "");
-        current.montantStr = lastMatch[2];
-        current.sign = lastMatch[3];
-        flush();
-        return;
+      // Cas rare : date valeur / montant sur une ligne séparée plutôt que sur la première ligne.
+      if (!current.montantStr) {
+        const lastMatch = text.match(LAST_LINE_RE);
+        if (lastMatch) {
+          current.dateValeur = lastMatch[1].replace(/\s+/g, "");
+          current.montantStr = lastMatch[2];
+          current.sign = lastMatch[3];
+          return;
+        }
       }
       current.descLines.push(text);
-      const c = bucketText(line, line.width * 0.45, line.width * 0.75);
+      const c = bucketText(line, line.width * 0.50, line.width * 0.72);
       if (c) current.contrepartieLines.push(c);
     }
   });
