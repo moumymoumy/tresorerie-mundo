@@ -294,6 +294,8 @@ function useTrackerData() {
         })),
         transactions: txRes.data.map(t => ({
           id: t.id, date: t.date, label: t.label, amount: t.amount, type: t.type, category: t.category,
+          dateValeur: t.date_valeur, numeroOperation: t.numero_operation, contrepartie: t.contrepartie,
+          referenceBanque: t.reference_banque, source: t.source,
         })),
         categories: catRes.data,
       });
@@ -555,6 +557,8 @@ function Tracker({ onLogout }) {
   const [newRecurring, setNewRecurring] = useState({ label: "", amount: "", type: "expense", day: "1" });
   const [newTx, setNewTx] = useState({ date: todayISO(), label: "", amount: "", type: "expense", category: "" });
   const [showImportPdf, setShowImportPdf] = useState(false);
+  const [sortKey, setSortKey] = useState("dateValeur");
+  const [sortDir, setSortDir] = useState("desc");
 
   if (loadError) {
     return (
@@ -574,9 +578,11 @@ function Tracker({ onLogout }) {
   let running = settings.openingBalance;
   const weekRows = weeks.map((w) => {
     const weekEvents = events.filter((e) => dateInRange(e.date, w.start, w.end));
-    const net = weekEvents.reduce((s, e) => s + e.amount, 0);
+    const recette = weekEvents.filter((e) => e.amount > 0).reduce((s, e) => s + e.amount, 0);
+    const depense = weekEvents.filter((e) => e.amount < 0).reduce((s, e) => s + e.amount, 0);
+    const net = recette + depense;
     running += net;
-    return { ...w, net, balance: running, events: weekEvents };
+    return { ...w, net, recette, depense, balance: running, events: weekEvents };
   });
 
   let runningM = settings.openingBalance;
@@ -590,6 +596,27 @@ function Tracker({ onLogout }) {
   });
 
   const currentBalance = weekRows.length ? weekRows[weekRows.length - 1].balance : settings.openingBalance;
+
+  const toggleSort = (key) => {
+    if (sortKey === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
+
+  const sortedTransactions = [...transactions].sort((a, b) => {
+    let va = a[sortKey], vb = b[sortKey];
+    if (sortKey === "dateValeur") { va = va || a.date; vb = vb || b.date; }
+    if (va === null || va === undefined) va = "";
+    if (vb === null || vb === undefined) vb = "";
+    if (typeof va === "string") va = va.toLowerCase();
+    if (typeof vb === "string") vb = vb.toLowerCase();
+    if (va < vb) return sortDir === "asc" ? -1 : 1;
+    if (va > vb) return sortDir === "asc" ? 1 : -1;
+    return 0;
+  });
   const firstDangerWeek = weekRows.find((w) => w.balance < settings.alertThreshold);
   const firstNegativeWeek = weekRows.find((w) => w.balance < 0);
   const balanceColor = currentBalance < 0 ? "var(--red)" : currentBalance < settings.alertThreshold ? "var(--amber)" : "var(--green)";
@@ -632,7 +659,7 @@ function Tracker({ onLogout }) {
     const { data: inserted, error } = await supabase.from("Suivi_Tresorerie_transactions").insert(row).select().single();
     if (error) { setSaveError(true); return; }
     setSaveError(false);
-    setDataState({ ...data, transactions: [...transactions, { id: inserted.id, date: row.date, label: row.label, amount: row.amount, type: row.type, category: row.category }] });
+    setDataState({ ...data, transactions: [...transactions, { id: inserted.id, date: row.date, label: row.label, amount: row.amount, type: row.type, category: row.category, dateValeur: null, numeroOperation: null, contrepartie: null, referenceBanque: null, source: "manuel" }] });
     setNewTx({ date: todayISO(), label: "", amount: "", type: "expense", category: "" });
     setShowAddTx(false);
   };
@@ -719,12 +746,13 @@ function Tracker({ onLogout }) {
         <div className="card" style={{padding:0}}>
           <div className="tbl-scroll">
             <table>
-              <thead><tr><th>Semaine</th><th>Transactions</th><th className="right">Net</th><th className="right">Solde</th></tr></thead>
+              <thead><tr><th>Semaine</th><th className="right">Recettes</th><th className="right">Dépenses</th><th className="right">Net</th><th className="right">Solde</th></tr></thead>
               <tbody>
                 {weekRows.map((w) => (
                   <tr key={w.index}>
                     <td style={{whiteSpace:"nowrap"}} className="muted">S{w.index} · {shortDate(w.start)}–{shortDate(w.end)}</td>
-                    <td className="muted">{w.events.length===0 ? <span style={{color:"#cbd5e1"}}>—</span> : w.events.map(e=>e.label).join(", ")}</td>
+                    <td className="right" style={{color:"var(--green)"}}>{w.recette?fmt(w.recette):"—"}</td>
+                    <td className="right" style={{color:"var(--red)"}}>{w.depense?fmt(w.depense):"—"}</td>
                     <td className="right" style={{color: w.net<0?"var(--red)":w.net>0?"var(--green)":"#94a3b8"}}>{w.net!==0?fmt(w.net):"—"}</td>
                     <td className="right" style={{fontWeight:600,color: w.balance<0?"var(--red)":w.balance<settings.alertThreshold?"var(--amber)":"#1e293b"}}>{fmt(w.balance)}</td>
                   </tr>
@@ -753,6 +781,35 @@ function Tracker({ onLogout }) {
           </table>
         </div>
       )}
+
+      <div className="card" style={{marginTop:16,padding:0}}>
+        <p style={{fontSize:14,fontWeight:600,padding:"16px 16px 0"}}>Toutes les transactions</p>
+        <div className="tbl-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th style={{cursor:"pointer"}} onClick={() => toggleSort("dateValeur")}>Date valeur {sortKey==="dateValeur" ? (sortDir==="asc"?"▲":"▼") : ""}</th>
+                <th style={{cursor:"pointer"}} onClick={() => toggleSort("label")}>Description {sortKey==="label" ? (sortDir==="asc"?"▲":"▼") : ""}</th>
+                <th style={{cursor:"pointer"}} onClick={() => toggleSort("category")}>Catégorie {sortKey==="category" ? (sortDir==="asc"?"▲":"▼") : ""}</th>
+                <th className="right" style={{cursor:"pointer"}} onClick={() => toggleSort("amount")}>Montant {sortKey==="amount" ? (sortDir==="asc"?"▲":"▼") : ""}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedTransactions.map((t) => (
+                <tr key={t.id}>
+                  <td className="muted" style={{whiteSpace:"nowrap"}}>{t.dateValeur ? new Date(t.dateValeur+"T00:00:00").toLocaleDateString("fr-BE") : "—"}</td>
+                  <td style={{maxWidth:360}}>{t.label}</td>
+                  <td className="muted">{t.category || "—"}</td>
+                  <td className="right" style={{color: t.type==="expense"?"var(--red)":"var(--green)"}}>{t.type==="expense"?"-":"+"}{fmt(Math.abs(t.amount))}</td>
+                </tr>
+              ))}
+              {sortedTransactions.length===0 && (
+                <tr><td colSpan="4" className="small muted" style={{padding:16}}>Aucune transaction enregistrée.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="card" style={{marginTop:16}}>
         <div className="row between">
